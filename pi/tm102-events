@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""
+tm102-events — print TM102 game events as JSON, one per line, forever.
+
+The ESP32 does the decoding. This program finds it, keeps it connected, and
+passes its events through to stdout. That is all it does; the protocol work
+lives in the firmware, so nothing here has to be kept in step with it.
+
+    ./tm102-events                 # stream events
+    ./tm102-events --pretty        # human-readable, for watching
+    ./tm102-events | your-program  # the intended use
+
+Every line on stdout is one JSON object and is flushed immediately, so a
+consumer reading line by line sees each event as it happens. Anything the board
+prints that is not an event — banners, self-test output — goes to stderr, so it
+stays visible while never contaminating the stream.
+
+If the board is unplugged the program waits and reconnects; it does not exit.
+An appliance that dies when a cable is nudged is not an appliance.
+"""
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+try:
+    import serial
+    from serial.tools import list_ports
+except ImportError:
+    sys.exit("pyserial missing.  Install it with:  pip3 install pyserial")
+
+HINTS = ("ttyUSB", "ttyACM", "usbserial", "SLAB", "wchusb")
+
+
+def find_port(explicit=None):
+    if explicit:
+        return explicit
+    # by-id is stable across reboots and across which USB socket is used,
+    # which matters on a machine nobody logs into.
+    byid = Path("/dev/serial/by-id")
+    if byid.is_dir():
+        for p in sorted(byid.iterdir()):
+            if any(h in p.name for h in ("CP210", "cp210", "USB")):
+                return str(p.resolve())
+    for p in list_ports.comports():
+        if any(h in p.device for h in HINTS):
+            return p.device
+    return None
+
+
+def describe(o):
+    ev = o.get("ev")
+    if ev == "buzz":
+        return f"BUZZER {o.get('buzzer')}"
+    if ev == "ready":
+        return f"ready ({o.get('state')}, last winner {o.get('buzzer')})"
+    if ev == "boot":
+        return f"board booted: {o.get('fw')}"
+    return ev
+
+
+def run(port, baud, pretty):
+    ser = serial.Serial(port, baud, timeout=1)
+    print(f"# connected {port}", file=sys.stderr, flush=True)
+    ser.write(b"e\n")           # harmless if it is already in events mode
+    while True:
+        raw = ser.readline()
+        if not raw:
+            continue
+        line = raw.decode(errors="replace").strip()
+        if not line:
+            continue
+        if not line.startswith("{"):
+            print(line, file=sys.stderr, flush=True)
+            continue
+        try:
+            o = json.loads(line)
+        except ValueError:
+            print(line, file=sys.stderr, flush=True)
+            continue
+        if pretty:
+            print(f"{time.strftime('%H:%M:%S')}  {describe(o)}", flush=True)
+        else:
+            print(json.dumps(o), flush=True)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", help="serial device (default: autodetect)")
+    ap.add_argument("--baud", type=int, default=115200)
+    ap.add_argument("--pretty", action="store_true",
+                    help="human-readable instead of JSON")
+    args = ap.parse_args()
+
+    while True:
+        port = find_port(args.port)
+        if not port:
+            print("# no board found, waiting", file=sys.stderr, flush=True)
+            time.sleep(3)
+            continue
+        try:
+            run(port, args.baud, args.pretty)
+        except KeyboardInterrupt:
+            return 0
+        except (serial.SerialException, OSError) as e:
+            print(f"# lost the board ({e}), reconnecting", file=sys.stderr, flush=True)
+            time.sleep(3)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -83,7 +83,7 @@ static const uint8_t N_CHANNELS = sizeof(CHANNELS) / sizeof(CHANNELS[0]);
 // ---------------------------------------------------------------------------
 // Tunables
 // ---------------------------------------------------------------------------
-static const char FW_VERSION[] = "v10 (self-test mode-aware) 2026-08-26";
+static const char FW_VERSION[] = "v11 (events) 2026-08-26";
 
 static const uint32_t SERIAL_BAUD      = 115200;
 static const uint16_t SCAN_DWELL_MS    = 25;    // continuous listen per channel per sweep
@@ -102,7 +102,7 @@ static const uint8_t REG_RF_CH    = 0x05;
 static const uint8_t REG_RF_SETUP = 0x06;
 
 enum Mode : uint8_t { MODE_IDLE, MODE_SCAN, MODE_DUMP, MODE_HOP, MODE_WATCH, MODE_FIND, MODE_LOCK,
-                      MODE_MATCH, MODE_CLEAN };
+                      MODE_MATCH, MODE_CLEAN, MODE_EVENTS };
 
 // ---------------------------------------------------------------------------
 // PHASE 2 — lock onto the real address.
@@ -847,6 +847,174 @@ static void serviceAddrStart()
   g_mode = MODE_CLEAN;
 }
 
+
+// ===========================================================================
+// MODE_EVENTS — decode on the board and emit JSON, one object per line.
+//
+// This is the deployment mode. Anything that can open a serial port and read a
+// line gets the game events directly; no decoding library, no Python, no
+// dependency on this project at all beyond the port itself.
+//
+//   {"t":128374,"ev":"general"}
+//   {"t":131002,"ev":"buzz","buzzer":3}
+//   {"t":133440,"ev":"lock"}
+//   {"t":139110,"ev":"clear"}
+//
+// The logic is a direct port of tools/decode_state.py, which was validated
+// against five captures with known ground truth. It is deliberately a port and
+// not a reimplementation: the same thresholds, the same three states, the same
+// measured handset table, so the two can be checked against each other on an
+// identical stream. Command 'v' echoes raw frames alongside the events, which
+// is how that check is done.
+// ---------------------------------------------------------------------------
+static const uint8_t CONFIRM          = 5;  // frames to accept idle <-> armed
+static const uint8_t CONFIRM_ANSWERED = 3;  // ... and to accept a buzz-in
+
+enum GState : uint8_t { ST_UNKNOWN = 0, ST_IDLE, ST_ARMED, ST_ANSWERED };
+
+static bool     g_echoRaw     = false;
+static uint8_t  g_curState    = ST_UNKNOWN;
+static uint8_t  g_curWinner   = 0;      // 0 = nobody
+static uint8_t  g_pendState   = ST_UNKNOWN;
+static uint8_t  g_pendWinner  = 0;
+static uint8_t  g_sameCount   = 0;
+static bool     g_inRandom    = false;
+static bool     g_randPicked  = false;
+
+// p6 -> handset. The measured table is the authority; the formula only covers
+// handsets nobody has pressed. See FINDINGS.md — the obvious linear reading
+// was wrong for handsets 4 to 7.
+static uint8_t buzzerFromP6(uint8_t p6)
+{
+  switch (p6) {
+    case 0x95: return 1;  case 0x96: return 2;  case 0x97: return 3;
+    case 0x90: return 4;  case 0x91: return 5;  case 0x92: return 6;
+    case 0x93: return 7;  case 0x9C: return 8;
+  }
+  if (p6 >= 0x90 && p6 <= 0xB4) {
+    const uint8_t n = (uint8_t)((p6 - 0x90) ^ 0x04);
+    if (n >= 1 && n <= 32) return n;
+  }
+  return 0;
+}
+
+static uint8_t classifyState(const uint8_t *b)
+{
+  if (b[1] == 0x76) return ST_IDLE;
+  if (b[1] == 0x77) return (b[3] == 0x00 && b[4] == 0x00) ? ST_ANSWERED : ST_ARMED;
+  return ST_UNKNOWN;
+}
+
+static const char *stateName(uint8_t s)
+{
+  switch (s) {
+    case ST_IDLE:     return "idle";
+    case ST_ARMED:    return "armed";
+    case ST_ANSWERED: return "answered";
+  }
+  return "unknown";
+}
+
+static void emitEvent(const char *ev)
+{
+  Serial.printf("{\"t\":%lu,\"ev\":\"%s\"}\n", (unsigned long)millis(), ev);
+}
+
+static void emitBuzz(uint8_t n)
+{
+  if (n) Serial.printf("{\"t\":%lu,\"ev\":\"buzz\",\"buzzer\":%u}\n",
+                       (unsigned long)millis(), n);
+  else   Serial.printf("{\"t\":%lu,\"ev\":\"buzz\",\"buzzer\":null}\n",
+                       (unsigned long)millis());
+}
+
+// Random mode has no state signature — p1 stays 0x76 throughout — so it is
+// tracked from the command codes instead. Both repeat every ~3 s while active,
+// hence the latches: report entering and leaving, not every repetition.
+static void serviceRandom(const uint8_t *b)
+{
+  if (b[3] != 0x00) return;
+  const uint8_t cmd = b[4];
+  if (cmd == 0x8F) {
+    if (!g_inRandom) { emitEvent("random_start"); g_inRandom = true; g_randPicked = false; }
+  } else if (cmd == 0x95) {
+    if (g_inRandom && !g_randPicked) { emitEvent("random_pick"); g_randPicked = true; }
+  } else if (cmd == 0x8C) {
+    if (g_inRandom) { emitEvent("random_end"); g_inRandom = false; g_randPicked = false; }
+  }
+}
+
+static void feedFrame(const uint8_t *b)
+{
+  serviceRandom(b);
+
+  const uint8_t st = classifyState(b);
+  if (st == ST_UNKNOWN) return;
+  const uint8_t w = buzzerFromP6(b[6]);
+
+  if (st == g_pendState && w == g_pendWinner) {
+    if (g_sameCount < 255) g_sameCount++;
+  } else {
+    g_pendState = st; g_pendWinner = w; g_sameCount = 1;
+  }
+
+  const uint8_t need = (st == ST_ANSWERED) ? CONFIRM_ANSWERED : CONFIRM;
+  if (g_sameCount < need) return;
+  if (st == g_curState && w == g_curWinner) return;
+
+  if (g_curState == ST_UNKNOWN) {
+    // Where we joined, not something that just happened.
+    Serial.printf("{\"t\":%lu,\"ev\":\"ready\",\"state\":\"%s\",\"buzzer\":",
+                  (unsigned long)millis(), stateName(st));
+    if (w) Serial.printf("%u}\n", w); else Serial.print("null}\n");
+    g_curState = st; g_curWinner = w;
+    return;
+  }
+
+  if (st != g_curState) {
+    if      (st == ST_ARMED    && g_curState == ST_IDLE)     emitEvent("general");
+    else if (st == ST_ANSWERED)                              emitBuzz(w);
+    else if (st == ST_IDLE)                                  emitEvent("clear");
+    else if (st == ST_ARMED    && g_curState == ST_ANSWERED) emitEvent("lock");
+  } else if (w != g_curWinner && w != 0) {
+    Serial.printf("{\"t\":%lu,\"ev\":\"winner_changed\",\"buzzer\":%u}\n",
+                  (unsigned long)millis(), w);
+  }
+  g_curState = st; g_curWinner = w;
+}
+
+static void serviceEvents()
+{
+  uint8_t buf[32];
+  while (radio.available()) {
+    radio.read(buf, g_cleanLen);
+    g_packets++;
+    // Same sanity gate as the Python: p1 and p5 are 0x7x in every real frame,
+    // and noise matches neither.
+    if ((buf[1] & 0xF0) != 0x70 && (buf[5] & 0xF0) != 0x70) continue;
+    if (g_echoRaw) {
+      char hex[32 * 3 + 1];
+      for (uint8_t i = 0; i < g_cleanLen; i++) sprintf(&hex[i * 3], "%02X ", buf[i]);
+      hex[g_cleanLen * 3 - 1] = '\0';
+      Serial.printf("[CH: %u] LEN: %u | HEX: %s | T:%lu RPD:%d\n",
+                    g_channel, g_cleanLen, hex, (unsigned long)millis(),
+                    radio.testRPD() ? 1 : 0);
+    }
+    feedFrame(buf);
+  }
+}
+
+static void startEvents()
+{
+  configureMatched(ADDR_LEN, 0);       // real 5-byte address, CRC off
+  g_curState = ST_UNKNOWN; g_curWinner = 0;
+  g_pendState = ST_UNKNOWN; g_pendWinner = 0; g_sameCount = 0;
+  g_inRandom = false; g_randPicked = false;
+  Serial.printf("{\"t\":%lu,\"ev\":\"boot\",\"fw\":\"%s\",\"schema\":1,\"channel\":%u}\n",
+                (unsigned long)millis(), FW_VERSION, g_channel);
+  g_mode = MODE_EVENTS;
+}
+
 // ===========================================================================
 // Serial command handling
 // ===========================================================================
@@ -860,7 +1028,9 @@ static void printHelp()
   Serial.println(F("  d        dump capture on locked channel"));
   Serial.println(F("  g        toggle the signal gate (default ON: drop static)"));
   Serial.println(F("  k        LOCK-ON: try each candidate address for real"));
-  Serial.println(F("  n        CAPTURE: real 5-byte address, CRC off. <-- use this one"));
+  Serial.println(F("  e        EVENTS: decode on board, emit JSON. <-- deployment mode"));
+  Serial.println(F("  v        toggle raw frame echo alongside events (for checking)"));
+  Serial.println(F("  n        CAPTURE: raw frames, real 5-byte address, CRC off"));
   Serial.println(F("  m        CRC sweep (already run; answer was: no CRC)"));
   Serial.println(F("  h        hop across all channels while dumping"));
   Serial.println(F("  x        stop"));
@@ -911,6 +1081,15 @@ static void handleCommand(char *cmd)
                     g_channel, 2400 + g_channel, g_baitAA ? "AAAA" : "0000",
                     g_gated ? "ON (only real signal)" : "OFF (everything)");
       if (g_gated) Serial.println(F("Quiet output is normal — most captures are static and get dropped."));
+      break;
+
+    case 'e':
+      startEvents();
+      break;
+
+    case 'v':
+      g_echoRaw = !g_echoRaw;
+      Serial.printf("# raw echo %s\n", g_echoRaw ? "ON" : "off");
       break;
 
     case 'n':
@@ -1045,6 +1224,13 @@ void setup()
 
   printHelp();
   selfTest();
+
+  // Start decoding immediately. On a Raspberry Pi or any other host this has
+  // to work with nothing sent to it: if the board waited to be told, a host
+  // process that crashed or was restarted would leave it silent and the
+  // silence would look exactly like a controller that is switched off.
+  // Any other mode can still be selected afterwards by typing its letter.
+  startEvents();
 }
 
 void loop()
@@ -1069,6 +1255,7 @@ void loop()
     case MODE_LOCK:  serviceLock();  break;
     case MODE_MATCH: serviceMatch(); break;
     case MODE_CLEAN:                 serviceClean(true); break;
+    case MODE_EVENTS: serviceEvents(); break;
     case MODE_WATCH: serviceWatch(); break;
     case MODE_FIND:  serviceFind();  break;
     case MODE_HOP:  serviceHop();  servicePackets(true); break;

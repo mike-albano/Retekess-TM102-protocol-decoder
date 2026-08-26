@@ -1,0 +1,24 @@
+# Install:
+#   sudo cp pi/tm102-events /usr/local/bin/
+#   sudo cp pi/tm102-events.service /etc/systemd/system/
+#   sudo systemctl enable --now tm102-events
+#
+# Then read the stream with:  journalctl -fu tm102-events -o cat
+# Or drop the service and just pipe the command into your own program.
+
+[Unit]
+Description=TM102 buzzer events
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/local/bin/tm102-events
+Restart=always
+RestartSec=3
+# The board is a serial device; on Raspberry Pi OS that is group 'dialout'.
+User=pi
+Group=dialout
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
