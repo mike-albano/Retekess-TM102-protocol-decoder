@@ -50,6 +50,7 @@ of *which button was pressed* and *which buzzer won*. See **Project goal**.
 | 2026-08-26 | **`p6` = `0x94` + buzzer number** — the identity field. Working JSON decoder built and validated |
 | 2026-08-26 | All 8 handsets mapped: `p6` = `0x90` + (n XOR 4). Linear rule refuted |
 | 2026-08-26 | Map verified 8/8 live against declared handset order |
+| 2026-08-26 | Voice announcements added for range testing; cold start of both devices verified; `p6` shown to be volatile |
 | 2026-08-26 | Live test found a third state (**answered**) and a decoder flaw: repeat wins by the same buzzer were invisible. Fixed, then confirmed live on a run built around repeat wins |
 
 ### Open questions
@@ -582,8 +583,8 @@ of what was observed, which cannot disagree with itself.
 formula only for handsets nobody has pressed. A measurement is never
 overridden by a rule inferred from it.
 
-**Also untested:** whether p6 survives a power cycle, and whether the latch can
-be cleared at all short of one.
+~~**Also untested:** whether p6 survives a power cycle~~ — **settled**: it does
+not. See *Power cycling*.
 
 ### Three states, not two — and how the live test found it  [FACT — 2026-08-26]
 
@@ -654,6 +655,55 @@ The earlier validation looked convincing and was wrong. "25 general, 25 clear"
 matched the operator's count exactly while the buzz count was off by 24, and
 nothing in the numbers announced it. Ground truth on *one* field is not
 validation of the others.
+
+### Power cycling  [FACT — 2026-08-26]
+
+**The controller clears its state.** Buzz handset 5, confirm `p6 = 0x91`
+latched, power cycle the controller, reconnect:
+
+```
+captures/…154512_live.log  last event:  buzz buzzer 5 (p6 0x91), then clear
+captures/…154800_live.log  opened:      idle, last winner: nobody
+```
+
+So p6 lives in RAM, not in non-volatile memory, and the round returns to
+cleared. A decoder must therefore **not** trust p6 at startup as "who won
+last" — until the first buzz of a session it means only "nobody since the
+controller last powered up". This closes an open question and matters for any
+software built on this: the latch is per power-on, not permanent.
+
+**The ESP32 tolerates a cold start.** Unplugged at the USB, replugged, run
+again: no reconfiguration needed, everything decoded normally. This was worth
+testing specifically because the nRF24 module has a documented brownout mode
+on this hardware (see *Hardware*), and a cold power-up is the only thing that
+exercises the module's own regulator from zero.
+
+### Correction: the serial port does not reset the board  [REFUTED]
+
+~~Opening the serial port resets the ESP32 via DTR, so every `live.py` run
+starts from a fresh boot~~ — **wrong.** Board uptime across six consecutive
+sessions:
+
+| session | 13:46 | 14:00 | 14:20 | 14:58 | 15:39 | 15:45 | 15:48 |
+|---|---|---|---|---|---|---|---|
+| uptime | 1600 s | 2467 s | 3616 s | 5922 s | 8379 s | 8712 s | **19.5 s** |
+
+Monotonic for 2.4 hours, then a physical unplug. The board was **never**
+rebooted by opening the port. The clue was there the whole time and was
+explained away: no boot banner ever appeared in any log, which was put down to
+a buffer flush rather than to there being no boot.
+
+Two consequences. The operator's power cycle was the *first* ESP32 reboot
+since flashing, which makes it a real test rather than a redundant one. And
+`live.py` cannot rely on a banner for a health check — it now sends `i`
+explicitly and prints the self-test result.
+
+**A trap this immediately created.** `verifyRegisters()` required
+`SETUP_AW == 0`, the 2-byte promiscuous exploit. Addressed capture uses a real
+5-byte address, so `SETUP_AW == 3`, and the newly-added self-test would have
+printed **"SELF-TEST: FAIL — stop here"** at the start of every ordinary
+session. The check now accepts either width and names which mode it is in.
+A health check that cries wolf is worse than none: it trains you to ignore it.
 
 ### A third frame class  [OPEN]
 

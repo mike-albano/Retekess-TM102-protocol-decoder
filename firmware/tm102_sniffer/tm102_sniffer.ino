@@ -83,7 +83,7 @@ static const uint8_t N_CHANNELS = sizeof(CHANNELS) / sizeof(CHANNELS[0]);
 // ---------------------------------------------------------------------------
 // Tunables
 // ---------------------------------------------------------------------------
-static const char FW_VERSION[] = "v9 (addressed capture) 2026-08-26";
+static const char FW_VERSION[] = "v10 (self-test mode-aware) 2026-08-26";
 
 static const uint32_t SERIAL_BAUD      = 115200;
 static const uint16_t SCAN_DWELL_MS    = 25;    // continuous listen per channel per sweep
@@ -258,9 +258,14 @@ static bool verifyRegisters()
                 (cfg & 0x02) ? "yes" : "no", (cfg & 0x01) ? "yes" : "no");
   Serial.printf("  EN_AA    0x%02X   auto-ack %s\n",
                 aa, aa ? "ENABLED (BAD)" : "disabled (good)");
+  // Two legitimate configurations now, not one. SETUP_AW 0 is the 2-byte
+  // promiscuous exploit; SETUP_AW 3 is the real 5-byte address used by the
+  // addressed capture ('n'), which is the normal mode of operation. Failing
+  // the second would raise an alarm on every ordinary session.
   Serial.printf("  SETUP_AW 0x%02X   address width %s\n",
-                aw, (aw == 0) ? "2 bytes — exploit ACTIVE (good)"
-                              : "NOT 2 bytes — exploit INACTIVE (BAD)");
+                aw, (aw == 0) ? "2 bytes — promiscuous mode (good)"
+                  : (aw == 3) ? "5 bytes — addressed mode (good)"
+                              : "neither 2 nor 5 bytes (BAD)");
   Serial.printf("  RF_CH    0x%02X   %u MHz\n", ch, 2400 + ch);
   Serial.printf("  RF_SETUP 0x%02X   rate %s\n",
                 rf, ((rf & 0x28) == 0x00) ? "1 Mbps (good)"
@@ -268,7 +273,8 @@ static bool verifyRegisters()
   Serial.printf("  bait address: %s\n", g_baitAA ? "AA AA" : "00 00");
 
   Serial.println(F("-----------------------"));
-  return (aw == 0) && !(cfg & 0x08) && (aa == 0) && ((rf & 0x28) == 0x00);
+  return (aw == 0 || aw == 3) && !(cfg & 0x08) && (aa == 0)
+         && ((rf & 0x28) == 0x00);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,15 +290,13 @@ static void selfTest()
     Serial.println(F("  The radio is configured and listening correctly."));
     Serial.println();
     Serial.println(F("  Channel is already known: RF_CH 50 (2450 MHz)."));
+    Serial.println(F("  Address is known: 18 18 18 18 3A, CRC off."));
     Serial.println(F(""));
-    Serial.println(F("  DO THIS NEXT:"));
-    Serial.println(F("    1. Put the board about 1 metre from the controller."));
-    Serial.println(F("    2. Type  k  and press Enter."));
-    Serial.println(F("    3. Press General then Clear every ~2 s for 40 seconds."));
-    Serial.println(F("       It tries 8 candidate addresses and stops on its own."));
-    Serial.println(F("    4. It names a winner and starts clean capture."));
+    Serial.println(F("  DO THIS NEXT:  type  n  — addressed capture."));
+    Serial.println(F("  Or just run  python3 tools/live.py  which does it for you."));
     Serial.println(F(""));
-    Serial.println(F("  ('f' re-hunts the channel, only needed if F4 changes.)"));
+    Serial.println(F("  ('f' re-hunts the channel, only if F4 changes."));
+    Serial.println(F("   'k' and 'd' are the older promiscuous path.)"));
   } else {
     Serial.println(F("  SELF-TEST: FAIL"));
     Serial.println(F("  The radio did not accept its settings. Capturing now"));

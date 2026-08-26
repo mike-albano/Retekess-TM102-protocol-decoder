@@ -24,8 +24,12 @@ exactly. This tool is a front end on it, not a second implementation.
 
 import argparse
 import datetime as dt
+import shutil
+import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,6 +45,74 @@ ROOT = Path(__file__).resolve().parent.parent
 CAPTURES = ROOT / "captures"
 
 BAR = "-" * 62
+
+
+class Speaker:
+    """Say event names out loud, for testing from across the room.
+
+    Speech is handled on its own thread so the serial reader never blocks —
+    a one-second `say` in the main loop would stall frame parsing and delay
+    the very detections being measured.
+
+    Anything queued more than STALE seconds ago is dropped rather than spoken.
+    During a range test the useful information is what is happening *now*; a
+    backlog read out thirty seconds late is worse than silence, because it
+    would be heard as a live reading of wherever you are standing then.
+    """
+
+    STALE = 2.5
+
+    def __init__(self, enabled=True, voice=None, rate=210):
+        self.q = deque()
+        self.lock = threading.Lock()
+        self.enabled = enabled and shutil.which("say") is not None
+        self.available = shutil.which("say") is not None
+        self.voice = voice
+        self.rate = rate
+        if self.enabled:
+            threading.Thread(target=self._run, daemon=True).start()
+
+    def say(self, text):
+        if not self.enabled:
+            return
+        with self.lock:
+            self.q.append((time.time(), text))
+
+    def _run(self):
+        while True:
+            item = None
+            with self.lock:
+                while self.q:
+                    when, text = self.q.popleft()
+                    if time.time() - when <= self.STALE:
+                        item = text
+                        break
+            if item is None:
+                time.sleep(0.05)
+                continue
+            cmd = ["say", "-r", str(self.rate)]
+            if self.voice:
+                cmd += ["-v", self.voice]
+            try:
+                subprocess.run(cmd + [item], check=False)
+            except Exception:
+                self.enabled = False
+                return
+
+
+def spoken(e):
+    """Short phrase for an event. Short matters: it has to finish before the
+    next press, and it is heard from the far side of a room."""
+    ev = e["event"]
+    if ev == "general":
+        return "General"
+    if ev == "clear":
+        return "Clear"
+    if ev == "rearmed":
+        return "Re-armed"
+    if ev == "buzz":
+        return f"Buzzer {e['buzzer']}" if e["buzzer"] else "Unknown buzzer"
+    return None
 
 
 def parse_expect(spec):
@@ -168,6 +240,13 @@ def main():
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--channel", default="50", help="RF_CH to lock (default 50)")
     ap.add_argument("--quiet", action="store_true", help="no periodic status line")
+    ap.add_argument("--test-voice", action="store_true",
+                    help="speak a sample of every phrase and exit")
+    ap.add_argument("--no-voice", action="store_true",
+                    help="do not speak events aloud")
+    ap.add_argument("--voice", help="macOS voice name, e.g. Samantha")
+    ap.add_argument("--rate", type=int, default=210,
+                    help="speech rate in words/min (default 210)")
     ap.add_argument("--verify", nargs="?", const="1-8", metavar="LIST",
                     help="walk through handsets and check each one against the "
                          "map. Default 1-8; or give a list like 3,4,7.")
@@ -176,6 +255,20 @@ def main():
                          "Same code path, no hardware needed — use it to check "
                          "the readout against a capture whose answer you know.")
     args = ap.parse_args()
+
+    if args.test_voice:
+        v = Speaker(True, args.voice, args.rate)
+        if not v.available:
+            print("No `say` command found — speech will not work here.")
+            return 1
+        for phrase in ("Listening", "General", "Buzzer 1", "Buzzer 8",
+                       "Clear", "Re-armed", "Signal lost", "Signal back"):
+            print(f"  {phrase}")
+            v.say(phrase)
+            time.sleep(1.4)
+        time.sleep(1.0)
+        print("\nIf you heard all eight, turn the volume up and go for a walk.")
+        return 0
 
     if args.replay:
         return replay(args.replay)
@@ -186,27 +279,55 @@ def main():
     path = CAPTURES / f"{stamp}_live.log"
 
     print(f"port {port}   log {path}")
-    print("Starting the board. Give it a couple of seconds.\n")
+    print("Starting the board and running its self-test.\n")
 
     ser = serial.Serial(port, args.baud, timeout=0.2)
-    time.sleep(2.5)                      # opening the port resets the ESP32
-    ser.reset_input_buffer()
+    # Opening the port does NOT reset this board — measured: uptime ran
+    # monotonically across six sessions before a physical unplug. So there is
+    # no boot banner to wait for, and whatever mode the last session left the
+    # board in is still active. The commands below reconfigure it regardless,
+    # which is why that has never caused trouble.
+    time.sleep(0.6)
+
+    # Ask for the self-test explicitly, since we cannot rely on a banner. On a
+    # cold start this is the only evidence the radio came up at all; without
+    # it, a radio that failed to initialise looks exactly like a controller
+    # that is switched off.
+    boot = b""
+    ser.write(b"i\n")
+    time.sleep(1.2)
+    if ser.in_waiting:
+        boot = ser.read(ser.in_waiting)
+
     for cmd in (f"r{args.channel}", "n"):
         ser.write(cmd.encode() + b"\n")
         time.sleep(0.4)
 
     tracker = StateTracker()
     verifier = Verifier(parse_expect(args.verify)) if args.verify else None
+    voice = Speaker(not args.no_voice, args.voice, args.rate)
+    if not args.no_voice and not voice.available:
+        print("  (no `say` command — speech disabled)")
     seen = {}
+    have_signal = True
     frames = last_frames = 0
     started = last_status = time.time()
     warned = False
 
     print(BAR)
+    voice.say("Listening")
     if verifier:
         print(verifier.prompt())
     fh = path.open("w")
     fh.write(f"# TM102 live session port={port} started={stamp}\n")
+    if boot:
+        text = boot.decode(errors="replace")
+        fh.write(text if text.endswith("\n") else text + "\n")
+        for line in text.splitlines():
+            line = line.strip()
+            if any(k in line for k in ("FIRMWARE", "RX ONLY", "!!", "HALTED",
+                                       "PASS", "FAIL", "OK", "Radio")):
+                print(f"  [board] {line[:80]}")
     try:
         while True:
             raw = ser.readline()
@@ -214,6 +335,13 @@ def main():
             if raw:
                 text = raw.decode(errors="replace").rstrip()
                 fh.write(text + "\n")
+                # Surface the board's own startup and error lines. Without
+                # this, a radio that fails to initialise on a cold boot looks
+                # exactly like a controller that is switched off: both produce
+                # silence and the same "no frames" message.
+                if any(k in text for k in ("!!", "HALTED", "FIRMWARE",
+                                           "SELF-TEST", "FAIL")):
+                    print(f"  [board] {text}")
                 r = parse_line(text)
                 if r:
                     frames += 1
@@ -225,12 +353,19 @@ def main():
                         what, detail = describe(e)
                         ts = dt.datetime.now().strftime("%H:%M:%S")
                         print(f"  {ts}   {what:<28} {detail}")
+                        phrase = spoken(e)
+                        if phrase:
+                            voice.say(phrase)
                         if verifier:
                             line = (verifier.on_buzz(e) if e["event"] == "buzz"
                                     else verifier.on_clear()
                                     if e["event"] == "clear" else None)
                             if line:
                                 print(line)
+                                if line.startswith("  [PASS"):
+                                    voice.say("Pass")
+                                elif line.startswith("  [FAIL"):
+                                    voice.say("Fail")
                             if verifier.done() and e["event"] == "clear":
                                 raise KeyboardInterrupt
 
@@ -239,10 +374,19 @@ def main():
                 rate = (frames - last_frames) / (now - last_status)
                 last_frames, last_status = frames, now
                 if rate < 1:
+                    # Losing the controller is the thing a range test is
+                    # looking for, so it gets its own cue rather than only a
+                    # line on a screen nobody is standing near.
                     print(f"  ...no frames. Is the controller on? "
                           f"Is it on channel {args.channel}?")
+                    if have_signal:
+                        voice.say("Signal lost")
+                        have_signal = False
                     warned = True
                 elif warned or not args.quiet:
+                    if not have_signal:
+                        voice.say("Signal back")
+                        have_signal = True
                     st = tracker.cur or {}
                     who = st.get("winner")
                     print(f"  [listening: {rate:4.0f} frames/s  state: "
