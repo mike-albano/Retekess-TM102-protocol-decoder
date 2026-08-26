@@ -14,7 +14,8 @@ Payload bytes used (see FINDINGS.md, "The frame"):
     p3  \ both 0x00 while a buzz-in stands unanswered; anything else means
     p4  / the round is still open
     p6  0xFF = nobody has answered
-        0x95 = buzzer 1, 0x96 = buzzer 2, ...  (0x94 + n)
+        otherwise  p6 = 0x90 + (n XOR 4)  — see below, it is not a plain
+        counter and assuming it was cost us four wrong predictions
 
 Three states, not two: idle -> armed -> answered -> idle. The "answered" state
 must be read from p3/p4, NOT from p6 changing. p6 latches the last winner, so
@@ -38,12 +39,52 @@ Usage:
     tools/decode_state.py captures/xxx.log            # readable timeline
     tools/decode_state.py captures/xxx.log --json     # one JSON object per line
 """
-import re, sys, json
+import os, re, sys, json
 
 FRAME = re.compile(r"HEX: ([0-9A-F ]+) \| T:(\d+)")
 CONFIRM = 5          # frames needed to accept an idle <-> armed change
 CONFIRM_ANSWERED = 3 # ... and to accept a buzz-in
-BUZZER_BASE = 0x94          # p6 = BUZZER_BASE + buzzer number
+# Buzzer identity in p6.
+#
+# The obvious reading of the first three handsets was p6 = 0x94 + n, and it
+# held for buzzers 1, 2, 3 and 8. It is wrong. Measured across all eight:
+#
+#     n   1     2     3     4     5     6     7     8
+#     p6  0x95  0x96  0x97  0x90  0x91  0x92  0x93  0x9C
+#
+# The low nibble is n with bit 2 inverted — n XOR 4 — which fits all eight
+# exactly. Handsets 1, 2, 3 and 8 have bit 2 clear, so for them XOR 4 and + 4
+# give the same answer; that coincidence is what made the linear rule look
+# right on the sample we happened to test first.
+#
+# Why bit 2 is stored inverted is unknown. The rule is measured for n = 1-8
+# only; buzzer numbers go to 32 via the host's F2 menu, and nothing here has
+# been checked above 8.
+BUZZER_BASE = 0x90
+BUZZER_XOR = 0x04
+P6_MAX = 0xB4               # n = 32 -> 0x90 + (32 XOR 4) = 0xB4
+
+MAPFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "..", "event_map.json")
+
+
+def _load_measured():
+    """Measured p6 -> handset number, from event_map.json.
+
+    The table is the authority and the formula is only an extrapolation for
+    handsets nobody has pressed yet. That ordering matters: the formula has
+    already been wrong once, and a measurement should never be overridden by
+    a rule inferred from it.
+    """
+    try:
+        with open(MAPFILE) as fh:
+            m = json.load(fh)["winner"]["_measured"]
+        return {int(v, 16): int(n) for n, v in m.items()}
+    except Exception:
+        return {}
+
+
+MEASURED = _load_measured()
 
 def classify(b):
     """Payload -> game state, or None if this frame does not say."""
@@ -81,9 +122,13 @@ def frames(path):
 
 def winner(p6):
     # Buzzer numbers run 1-32 (the host's F2 "learning number" range), so a
-    # winner occupies 0x95-0xB4 exactly. Anything above that is 0xFF - meaning
-    # nobody has answered - with bits knocked out of it by the slicer.
-    n = p6 - BUZZER_BASE
+    # winner occupies 0x90-0xB4. Anything above that is 0xFF - nobody has
+    # answered - with bits knocked out of it by the slicer.
+    if p6 in MEASURED:
+        return MEASURED[p6]
+    if not BUZZER_BASE <= p6 <= P6_MAX:
+        return None
+    n = (p6 - BUZZER_BASE) ^ BUZZER_XOR
     return n if 1 <= n <= 32 else None
 
 
@@ -130,7 +175,11 @@ class StateTracker:
             if now_ == "armed" and was == "idle":
                 out.append({"t_ms": t, "event": "general", "state": "armed"})
             elif now_ == "answered":
-                out.append({"t_ms": t, "event": "buzz", "buzzer": obs["winner"]})
+                # Carry the raw p6 as well. If a handset ever reports a value
+                # outside 0x95-0xB4 the decoded number is None, and without the
+                # raw byte the event would say nothing useful about why.
+                out.append({"t_ms": t, "event": "buzz",
+                            "buzzer": obs["winner"], "p6": f"{b[6]:02X}"})
             elif now_ == "idle":
                 out.append({"t_ms": t, "event": "clear", "state": "idle"})
             elif now_ == "armed" and was == "answered":

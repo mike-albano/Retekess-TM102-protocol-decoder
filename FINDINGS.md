@@ -25,10 +25,10 @@ errors — see *Errors in the pre-existing PDF and README*.
 | **Controller events** | **`81` = General, `8C` = Clear** — measured |
 | **Game state** | Three: idle / armed / answered — in every beacon frame |
 | **Buzz-in** | armed → answered (`p3` = `p4` = `00`). **Not** a p6 change |
-| **Buzzer identity** | **`p6` = `0x94` + buzzer number** — confirmed for 1 and 2 |
+| **Buzzer identity** | **`p6` = `0x90` + (n XOR 4)** — all 8 handsets, verified 8/8 |
 | **Decoder** | `tools/decode_state.py` → JSON event stream |
 | **Live readout** | `tools/live.py` — names each button press as it happens |
-| **Validation** | Exact on 5 captures — 68 General, 68 Clear, 58 buzz-ins, right handset every time |
+| **Validation** | Exact on 6 captures — 83 General, 83 Clear, 73 buzz-ins, all 8 handsets |
 | **Cadence** | ~30 ms heartbeat; every event sent **twice**, 11 ms apart |
 
 **Goal:** a passive, receive-only decoder beside the controller that emits JSON
@@ -48,6 +48,8 @@ of *which button was pressed* and *which buzzer won*. See **Project goal**.
 | 2026-08-26 | **`81` = General, `8C` = Clear** — settled by timed asymmetric capture |
 | 2026-08-26 | Continuous state found in the beacon: `p1` = armed/idle, `p6` = last answerer (`95` = buzzer 1) |
 | 2026-08-26 | **`p6` = `0x94` + buzzer number** — the identity field. Working JSON decoder built and validated |
+| 2026-08-26 | All 8 handsets mapped: `p6` = `0x90` + (n XOR 4). Linear rule refuted |
+| 2026-08-26 | Map verified 8/8 live against declared handset order |
 | 2026-08-26 | Live test found a third state (**answered**) and a decoder flaw: repeat wins by the same buzzer were invisible. Fixed, then confirmed live on a run built around repeat wins |
 
 ### Open questions
@@ -140,10 +142,39 @@ have established the baseline framing.
 | 2 | ~~`general`~~ | ~~Timed: General, wait 10 s, Clear, wait 10 s, ×5~~ | **Done.** `81` = General, `8C` = Clear |
 | 3 | ~~`buzz-1`~~ | ~~General → buzzer **1** → Clear~~ | **Done.** `p6` = `95`, and it latches |
 | 4 | ~~`buzz-2`~~ | ~~General → buzzer **2** → Clear~~ | **Done.** `p6` = `96`. Identity byte found |
-| 5 | `buzz-3` **and** `buzz-8` | General → buzzer **3** → Clear; then the same with buzzer **8** | Confirms linearity. Predictions: `p6` = `0x97` and `0x9C`. A miss on either kills the formula |
+| 5 | ~~`buzz-3` … `buzz-8`~~ | ~~all six remaining handsets~~ | **Done.** Linear rule refuted; `p6` = `0x90` + (n XOR 4) |
 | 6 | `buzz-1-then-2` | Arm, buzzer 1 first then buzzer 2 | Whether rank (1st/2nd) is broadcast, and how |
 | 7 | `lock` / `random` / `rule` | Each mode button | Command byte for the other controller functions |
 | 8 | `pairing` | Hold a buzzer ~2 s | Enrolment exchange; likely a distinct frame type |
+
+### Order of work, as agreed 2026-08-26
+
+1. ~~Map the remaining six buzzers~~ — **done 2026-08-26**. The linear rule was
+   refuted; see *Correction: p6 is not a counter*.
+2. **Then** the two harder use cases below, deliberately saved for last because
+   both need the identity map to be solid before their results can be read.
+
+#### Use case A — placings beyond first
+
+`buzz-1-then-2`, and then three and four handsets in a known order. The host's
+F2 menu ranks up to **five** places, so the ranking exists somewhere; p6 holds
+only the winner. Either there are further identity bytes we have not attributed
+(p0, p2 and p7 are still unexplained), or placings are sent as a sequence of
+messages rather than a single field.
+
+#### Use case B — Lock
+
+The **Lock** button re-arms every buzzer *except* the one that just answered —
+for when the first team gets the question wrong. This is the most informative
+single test left, because it forces the protocol to express something our
+current model cannot: a per-buzzer enable mask, distinct from both "armed" and
+"answered". Whatever byte changes under Lock is a field we have not yet found,
+and it may be the same field that carries placings.
+
+Note it also predicts a state our decoder has no name for: armed, with a
+standing previous answerer, and one handset excluded. Expect `decode_state.py`
+to need a fourth state.
+
 
 Captures 3 and 4 are the ones that matter most: **the diff between them is the
 buzzer identity**, and that is the core of the JSON mapping.
@@ -487,16 +518,69 @@ buzz-in, then held for the remaining 73 s.
 | 1 | `0x95` |
 | 2 | `0x96` |
 
-**`p6 = 0x94 + buzzer number.`** This is the field the project was after.
+~~**`p6 = 0x94 + buzzer number.`**~~ — **wrong**, see the correction below.
+p6 *is* the field the project was after; the arithmetic was not.
 
 Buzzer numbers run 1–32 (the host's F2 *learning number* range), so a winner
 occupies `0x95`–`0xB4` exactly and anything above that is `0xFF` with bits
 knocked out of it. That gives the decoder a clean, non-arbitrary boundary.
 
-**Untested and worth knowing:** linearity is confirmed only for 1 → 2. An
-encoding of `0x90 | (n + 4)` fits the same two points and diverges from
-`0x94 + n` only above n = 11. With eight handsets we can reach `0x9C` (buzzer
-8) but not cross that boundary without renumbering one through F2.
+### Correction: p6 is not a counter  [FACT — all 8 handsets, 2026-08-26]
+
+`captures/20260826-142007_live.log`. Every handset, two or three rounds each:
+
+| n | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| **p6** | `95` | `96` | `97` | **`90`** | **`91`** | **`92`** | **`93`** | `9C` |
+
+The linear rule predicted `98 99 9A 9B` for handsets 4–7. It got `90 91 92 93`
+— and 4, 5, 6, 7 were rejected outright as out of range, because the decoder
+had been told nothing below `0x95` could be a buzzer.
+
+**The low nibble is `n` with bit 2 inverted:**
+
+```
+    p6 = 0x90 + (n XOR 4)          n = (p6 - 0x90) XOR 4
+```
+
+| n | binary | XOR 4 | p6 |
+|---|---|---|---|
+| 1 | `0001` | `0101` | `0x95` |
+| 4 | `0100` | `0000` | `0x90` |
+| 8 | `1000` | `1100` | `0x9C` |
+
+This fits all eight measurements exactly. Handsets 1, 2, 3 and 8 have bit 2
+**clear**, and for those `XOR 4` and `+ 4` give the same answer — which is
+precisely why the linear rule survived the first sample. We tested 1, 2, then
+predicted from two points that shared the property that made the wrong rule
+look right.
+
+**Why bit 2 is stored inverted is unknown**, and the rule is measured for
+n = 1–8 only. Handset numbers go to 32 through the host's F2 menu; nothing
+above 8 has been checked, and the same trap applies — a rule that fits eight
+points can still be the wrong rule. Renumbering one handset to, say, 20 would
+be the decisive test if it ever matters.
+
+**Method note.** The prediction was recorded before the capture, which is why
+this was caught in one run instead of becoming a latent bug in the decoder. It
+also argues for testing the *unlike* cases first: had we done handset 4 second
+instead of handset 2, the linear rule would never have been written down.
+
+### Confirmed end to end  [FACT — 2026-08-26]
+
+`captures/20260826-145842_live.log`, `tools/live.py --verify`. The operator
+declares the handset order up front, so the check can fail — unlike a summary
+of what was observed, which cannot disagree with itself.
+
+| handset | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| p6 | `95` | `96` | `97` | `90` | `91` | `92` | `93` | `9C` |
+| | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+
+**8 of 8**, in 35 seconds. The mapping lives in `event_map.json` and
+`decode_state.py` loads that table as the authority, falling back to the
+formula only for handsets nobody has pressed. A measurement is never
+overridden by a rule inferred from it.
 
 **Also untested:** whether p6 survives a power cycle, and whether the latch can
 be cleared at all short of one.

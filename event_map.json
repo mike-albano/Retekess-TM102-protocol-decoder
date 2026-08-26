@@ -7,22 +7,43 @@
   ],
   "state": {
     "_comment": "Three states, read from every beacon frame. The transmit rate corroborates each one independently.",
-    "idle":     { "p1": "76", "rate_per_s": 35 },
-    "armed":    { "p1": "77", "p3": "not 00", "rate_per_s": 148 },
-    "answered": { "p1": "77", "p3": "00", "p4": "00", "rate_per_s": 6 }
+    "idle": {
+      "p1": "76",
+      "rate_per_s": 35
+    },
+    "armed": {
+      "p1": "77",
+      "p3": "not 00",
+      "rate_per_s": 148
+    },
+    "answered": {
+      "p1": "77",
+      "p3": "00",
+      "p4": "00",
+      "rate_per_s": 6
+    }
   },
   "transitions": {
-    "idle -> armed":    "general pressed",
+    "idle -> armed": "general pressed",
     "armed -> answered": "a buzzer answered; p6 says which",
-    "-> idle":          "clear pressed"
+    "-> idle": "clear pressed"
   },
   "winner": {
     "_byte": "p6",
-    "_comment": "Last buzzer to answer. LATCHES - survives Clear and does not change when the same buzzer wins twice, so never use a p6 change to detect a buzz-in; use the armed -> answered transition. Formula confirmed for buzzers 1 and 2; linear beyond that assumed but untested.",
-    "_formula": "buzzer_number = p6 - 0x94",
-    "FF": "none since power-on",
-    "95": 1,
-    "96": 2
+    "_comment": "Last buzzer to answer. LATCHES - survives Clear and does not change when the same buzzer wins twice, so never use a p6 change to detect a buzz-in; use the armed -> answered transition.",
+    "_formula": "p6 = 0x90 + (n XOR 4);  n = (p6 - 0x90) XOR 4",
+    "_formula_note": "The low nibble is the handset number with bit 2 inverted. Measured on all 8 handsets. NOT a plain counter - an earlier linear reading (0x94 + n) fitted handsets 1,2,3,8 and was wrong for 4,5,6,7. Untested above n=8; handset numbers go to 32 via the host F2 menu.",
+    "_measured": {
+      "1": "95",
+      "2": "96",
+      "3": "97",
+      "4": "90",
+      "5": "91",
+      "6": "92",
+      "7": "93",
+      "8": "9C"
+    },
+    "FF": "none since power-on"
   },
   "button_events": {
     "_byte": "p4, in frames where p3 == 0x00",
