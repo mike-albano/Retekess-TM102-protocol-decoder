@@ -51,6 +51,7 @@ of *which button was pressed* and *which buzzer won*. See **Project goal**.
 | 2026-08-26 | All 8 handsets mapped: `p6` = `0x90` + (n XOR 4). Linear rule refuted |
 | 2026-08-26 | Map verified 8/8 live against declared handset order |
 | 2026-08-26 | Voice announcements added for range testing; cold start of both devices verified; `p6` shown to be volatile |
+| 2026-08-26 | **Lock decoded**: same `0x81` command as General, no mask transmitted, exclusion enforced at the handset and cumulative |
 | 2026-08-26 | Live test found a third state (**answered**) and a decoder flaw: repeat wins by the same buzzer were invisible. Fixed, then confirmed live on a run built around repeat wins |
 
 ### Open questions
@@ -145,7 +146,7 @@ have established the baseline framing.
 | 4 | ~~`buzz-2`~~ | ~~General → buzzer **2** → Clear~~ | **Done.** `p6` = `96`. Identity byte found |
 | 5 | ~~`buzz-3` … `buzz-8`~~ | ~~all six remaining handsets~~ | **Done.** Linear rule refuted; `p6` = `0x90` + (n XOR 4) |
 | 6 | `buzz-1-then-2` | Arm, buzzer 1 first then buzzer 2 | Whether rank (1st/2nd) is broadcast, and how |
-| 7 | `lock` / `random` / `rule` | Each mode button | Command byte for the other controller functions |
+| 7 | ~~`lock`~~ / `random` / `rule` | ~~Lock~~; the other mode buttons | **Lock done** — see *Lock*. It sends `0x81`, same as General |
 | 8 | `pairing` | Hold a buzzer ~2 s | Enrolment exchange; likely a distinct frame type |
 
 ### Order of work, as agreed 2026-08-26
@@ -704,6 +705,102 @@ explicitly and prints the self-test result.
 printed **"SELF-TEST: FAIL — stop here"** at the start of every ordinary
 session. The check now accepts either width and names which mode it is in.
 A health check that cries wolf is worse than none: it trains you to ignore it.
+
+## Lock  [FACT — 2026-08-26]
+
+Sources: `captures/20260826-155751_lock-basic.log`,
+`captures/20260826-160451_lock-excluded.log`.
+
+**Lock is not a distinct command.** It transmits the same event code as
+General, `p4 = 0x81` — 16 such frames for 4 Generals plus 4 Locks, splitting
+8/8. There is no separate "lock" message.
+
+**The armed state after Lock is bit-for-bit identical to the armed state after
+General.** 956 armed frames following General against 1,413 following Lock,
+compared per bit:
+
+```
+ p0 ........   p1 ........   p2 ........   p3 ........
+ p4 ........   p5 ........   p6 .....**.   p7 ........
+```
+
+Only p6 differs, and only because it holds the handset that just answered —
+the latch already understood. **No exclusion mask is transmitted.** p0, p2 and
+p7 remain unattributed but are not carrying it.
+
+**And "armed, excluding whoever is in p6" is not the rule either.** In
+`buzz-2`, handset 2 won 25 consecutive rounds with p6 pinned at `0x96`
+throughout and was never excluded. So the same air traffic produces different
+behaviour depending on history.
+
+### The exclusion is enforced at the handset  [FACT]
+
+During a 9.8-second locked window with handset 3 pressed twice, deliberately
+and firmly:
+
+- frame rate held flat at **132–150/s**, the normal armed rate. A real buzz-in
+  collapses it to ~6/s. The controller never changed state.
+- `p1 = 0x6D` frames, which are strongly buzz-associated, showed **no
+  elevation above the normal armed baseline**.
+
+That second point needs stating carefully, because the first version of it
+here was wrong. `0x6D` frames are not absent from armed windows — measured
+across all five captures, by the state they fall in:
+
+| state | `0x6D` share of frames |
+|---|---|
+| answered (just after a buzz) | **35%** |
+| armed, after General | 1.01% |
+| armed, after Lock | 0.87% |
+| idle, after Clear | 0.00% |
+
+So the claim is not "zero traffic" but the stronger, controlled one: **an armed
+window with the locked handset being pressed is indistinguishable from an armed
+window with nobody pressing anything** — 0.87% against 1.01%, on 4,827 and
+11,451 frames. Had the handset transmitted and been rejected, the answered-state
+signature at 35% would have appeared. It does not.
+
+A locked-out handset therefore produces no detectable air traffic. The
+controller is not receiving and discarding — there is nothing to discard.
+
+### How the handset knows  [OPEN — hypothesis]
+
+The handset must infer its exclusion from the same broadcast everyone hears.
+The only thing distinguishing a post-Lock arm from a post-Clear arm, from the
+handset's point of view, is that **no Clear intervened**. Each handset knows
+whether *it* was the last to answer.
+
+Proposed rule: *on arm, stay out if I answered since the last Clear.* That
+fits every observation, needs no hidden field, and explains why the armed
+state is bit-identical.
+
+### Exclusions accumulate  [FACT — 2026-08-26]
+
+`captures/20260826-160932_lock-twice.log`. General → handset 3 → Lock →
+handset 5 → Lock → handset 3 pressed twice → handset 7 → Clear.
+
+During the second locked window, **p6 held `0x91` — handset 5** — and handset 3
+was pressed twice with no reaction: 1,360 frames at 135/s, flat, no state
+change, `0x6D` at baseline.
+
+This settles the rule. Handset 3 stayed out while p6 named a *different*
+handset, so the exclusion cannot be "p6 names me". It is **"I answered since
+the last Clear"**, held by each handset about itself, and it **accumulates**:
+lock out one team, then another, and both stay out until Clear.
+
+Practically, for the quiz: successive wrong answers can be locked out one after
+another, and only Clear brings anyone back.
+
+For a decoder this is the awkward case. The set of locked-out handsets is never
+transmitted and now cannot even be derived from p6 — it has to be reconstructed
+by tracking every buzz since the last Clear. That is doable from our event
+stream, since we see every buzz and every Clear, but it is inference, not
+observation, and it will drift if a buzz is ever missed.
+
+This has consequences for the decoder. A passive receiver **cannot** see which
+handsets are locked out — the information is never transmitted. It can only be
+inferred by tracking the same history the handsets track: who answered, and
+whether a Clear has happened since.
 
 ### A third frame class  [OPEN]
 
