@@ -1,0 +1,64 @@
+# TM102 capture — label=matched port=/dev/cu.usbserial-0001 started=20260826-130314
+locked RF_CH 50 (2450 MHz)
+
+Matched-receive sweep: 14 settings x 4 s = 56 s total.
+Keep pressing General then Clear the whole time.
+
+  [ 1/14] payload  6  CRC-16  -> 0
+  [ 2/14] payload  7  CRC-16  -> 0
+  [ 3/14] payload  8  CRC-16  -> 0
+  [ 4/14] payload  9  CRC-16  -> 0
+  [ 5/14] payload 10  CRC-16  -> 0
+  [ 6/14] payload 11  CRC-16  -> 0
+  [ 7/14] payload 12  CRC-16  -> 0
+  [ 8/14] payload  6  CRC- 8  -> 1
+  [ 9/14] payload  7  CRC- 8  -> 1
+  [10/14] payload  8  CRC- 8  -> 1
+  [11/14] payload  9  CRC- 8  -> 1
+  [12/14] payload 10  CRC- 8  -> 4
+  [13/14] payload 11  CRC- 8  -> 4
+  [14/14] payload 12  CRC- 8  -> 1
+
+=== matched-receive sweep ===
+  payload  CRC   frames
+      6    16    0
+      7    16    0
+      8    16    0
+      9    16    0
+     10    16    0
+     11    16    0
+     12    16    0
+      6     8    1   <<<
+      7     8    1   <<<
+      8     8    1   <<<
+      9     8    1   <<<
+     10     8    4   <<<
+     11     8    4   <<<
+     12     8    1   <<<
+
+Winner: payload 10 bytes, CRC-8, 4 frames.
+Every frame below has passed a hardware checksum. Capturing now.
+Press x to stop.
+
+[CH: 50] LEN: 10 | HEX: FA 77 FB 00 81 73 F7 DF 72 15 | T:300630 RPD:1
+[CH: 50] LEN: 10 | HEX: E9 77 F6 ED ED 73 DF EF A5 1C | T:300681 RPD:1
+[CH: 50] LEN: 10 | HEX: E9 77 EE F5 FD 73 77 DF 25 1C | T:300903 RPD:1
+[CH: 50] LEN: 10 | HEX: E9 77 F4 F6 FE 70 F6 BE 92 9E | T:303101 RPD:1
+[CH: 50] LEN: 10 | HEX: F2 76 F6 EE 63 73 D7 FB 40 99 | T:306057 RPD:1
+[CH: 50] LEN: 10 | HEX: F9 77 BE FD FD 73 FF F7 25 1C | T:307832 RPD:1
+[CH: 50] LEN: 10 | HEX: F1 77 7A F5 F5 73 BB F7 25 1C | T:310666 RPD:1
+[CH: 50] LEN: 10 | HEX: FA 76 FA E1 6C 73 FF EF F9 8E | T:311935 RPD:1
+[CH: 50] LEN: 10 | HEX: F5 77 76 FD EE 73 DD F7 25 1C | T:316209 RPD:1
+[CH: 50] LEN: 10 | HEX: F6 76 ED F9 74 73 F7 FD 69 9D | T:317539 RPD:1
+[CH: 50] LEN: 10 | HEX: F5 77 F6 FC FD 70 FE FD 52 9C | T:319812 RPD:1
+[CH: 50] LEN: 10 | HEX: F9 77 BA EC F6 70 ED FE 92 9E | T:320201 RPD:1
+[CH: 50] LEN: 10 | HEX: F5 77 D6 FD DD 73 B7 DD 25 1C | T:322698 RPD:1
+[CH: 50] LEN: 10 | HEX: F9 77 F6 FD FD 73 BD EF 25 1C | T:325319 RPD:1
+[CH: 50] LEN: 10 | HEX: F9 77 FA ED FD 73 F7 EF 25 1C | T:330749 RPD:1
+[CH: 50] LEN: 10 | HEX: F9 77 FA FD F6 70 ED FB 92 9E | T:330884 RPD:1
+[CH: 50] LEN: 10 | HEX: F1 77 EA FD FE 70 FD FF 52 9E | T:331130 RPD:1
+[CH: 50] LEN: 10 | HEX: F9 77 F4 FD FA 73 FD FA 25 1C | T:333091 RPD:1
+[CH: 50] LEN: 10 | HEX: F5 77 BA FC FE 70 F7 BD 12 9E | T:333196 RPD:1
+[CH: 50] LEN: 10 | HEX: F9 77 74 FD FE 73 BD F7 25 1C | T:333289 RPD:1
+[CH: 50] LEN: 10 | HEX: F2 76 FA F4 71 73 BF F5 F6 8F | T:335179 RPD:1
+stopped. 21 packets seen, 21 of them on real signal.

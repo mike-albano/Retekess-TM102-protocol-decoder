@@ -1,0 +1,13 @@
+# Downloaded toolchain, not project work. go.sh fetches it on demand.
+arduino-cli
+arduino-cli.yaml
+
+# Build/flash bookkeeping
+.last_flash
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# macOS Finder metadata
+.DS_Store
