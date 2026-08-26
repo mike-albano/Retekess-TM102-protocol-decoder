@@ -239,6 +239,9 @@ def main():
     ap.add_argument("--port")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--channel", default="50", help="RF_CH to lock (default 50)")
+    ap.add_argument("--label", default="live",
+                    help="names the log file, so a session can be identified "
+                         "afterwards by what was being done in it")
     ap.add_argument("--quiet", action="store_true", help="no periodic status line")
     ap.add_argument("--test-voice", action="store_true",
                     help="speak a sample of every phrase and exit")
@@ -276,7 +279,7 @@ def main():
     port = pick_port(args.port)
     CAPTURES.mkdir(exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = CAPTURES / f"{stamp}_live.log"
+    path = CAPTURES / f"{stamp}_{args.label}.log"
 
     print(f"port {port}   log {path}")
     print("Starting the board and running its self-test.\n")

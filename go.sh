@@ -96,7 +96,12 @@ do_capture() {
 case "${1:-all}" in
   setup)   do_setup ;;
   build)   do_build ;;
+  # Flash and stop. Worth having on its own: rolling a firmware change into
+  # the next capture means that if something misbehaves later you cannot tell
+  # the firmware change from whatever else that session did differently.
+  flash)   do_build; do_flash
+           say "Done. Check it with:  python3 tools/live.py" ;;
   capture) LABEL="${2:-session}" do_capture ;;
   all)     do_build; do_flash; sleep 2; LABEL="${2:-session}" do_capture ;;
-  *)       fail "usage: ./go.sh [setup|build|capture <label>]" ;;
+  *)       fail "usage: ./go.sh [setup|build|flash|capture <label>]" ;;
 esac
