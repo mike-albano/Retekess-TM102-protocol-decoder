@@ -28,6 +28,7 @@ errors — see *Errors in the pre-existing PDF and README*.
 | **Buzzer identity** | **`p6` = `0x90` + (n XOR 4)** — all 8 handsets, verified 8/8 |
 | **Decoder** | `tools/decode_state.py` → JSON event stream |
 | **Live readout** | `tools/live.py` — names each button press as it happens |
+| **Deployment** | Firmware v11 decodes on-board and emits JSON; `pi/` package |
 | **Validation** | Exact on 6 captures — 83 General, 83 Clear, 73 buzz-ins, all 8 handsets |
 | **Cadence** | ~30 ms heartbeat; every event sent **twice**, 11 ms apart |
 
@@ -52,6 +53,7 @@ of *which button was pressed* and *which buzzer won*. See **Project goal**.
 | 2026-08-26 | Map verified 8/8 live against declared handset order |
 | 2026-08-26 | Voice announcements added for range testing; cold start of both devices verified; `p6` shown to be volatile |
 | 2026-08-26 | **Lock decoded**: same `0x81` command as General, no mask transmitted, exclusion enforced at the handset and cumulative |
+| 2026-08-26 | Firmware v11 decodes on-board, emits JSON; port verified 23/23 against the Python decoder |
 | 2026-08-26 | **Random mode**: both presses visible (`8F`, `95`); the pick is unobtainable — not transmitted, not inferable from timing, and no buzzing follows to reveal it |
 | 2026-08-26 | Live test found a third state (**answered**) and a decoder flaw: repeat wins by the same buzzer were invisible. Fixed, then confirmed live on a run built around repeat wins |
 
@@ -1254,6 +1256,57 @@ wrong — as its own listed 8 mW transmit power already implied.
 **⇒ Expect two directions of traffic on the same channel**: buzzer uplinks
 (press events) and host downlinks (LED colour, lock, clear, mode, pairing).
 Do not assume a lone packet is a button press.
+
+## Packaging: decoding moved onto the board  [FACT — 2026-08-26]
+
+Firmware **v11** decodes on the ESP32 and emits one JSON object per event, so
+any consumer that can read a serial line gets game events with no library and
+no knowledge of this project:
+
+```
+{"t":26902,"ev":"buzz","buzzer":3}
+```
+
+It starts decoding on power-up rather than waiting for commands. On an
+unattended host that is the difference between an appliance and a science
+project: a board that waits goes silent whenever the host process restarts, and
+that silence is indistinguishable from a controller being switched off.
+
+### The port was verified, not assumed  [FACT]
+
+The event logic is a deliberate port of `decode_state.py` — same thresholds,
+same three states, same measured handset table — so the two can be compared
+rather than merely believed. Command `v` echoes raw frames alongside events;
+`tools/verify_firmware.py` runs the Python decoder over those same frames and
+diffs the two event streams.
+
+`captures/20260826-170354_fwcheck.log`:
+
+```
+raw frames    : 1735
+python events : 23
+board events  : 23
+MATCH — 23 events, identical in order, type and handset.
+```
+
+Same input, two independent implementations, exact agreement.
+
+**Still unverified: the random-mode path.** `decode_state.py` has no random
+support, so that session could not check it. The verifier now says so
+explicitly rather than reporting a clean MATCH that quietly excludes it, and it
+has gained a second implementation of the latch logic written from the
+description in *Random mode* rather than from the C++, so a future session
+containing Random presses will check it properly.
+
+### What is deliberately not offered
+
+`pi/README.md` documents three things a consumer cannot have, so nobody builds
+on an assumption the protocol does not support:
+
+- **the locked-out set** — never transmitted; reconstruct it from buzzes since
+  the last `clear`, which is a provable resync point
+- **the random pick** — not transmitted, not inferable, no downstream tell
+- **wall-clock time** — `t` is board uptime, monotonic, and resets on power loss
 
 ---
 

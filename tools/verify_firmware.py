@@ -29,6 +29,28 @@ from decode_state import StateTracker, parse_line          # noqa: E402
 
 ALIAS = {"rearmed": "lock", "initial_state": "ready"}
 
+# Random mode has no state signature, so decode_state.py does not handle it and
+# cannot be used to check it. This is a second, independent implementation of
+# the same spec — the latch behaviour the firmware applies to the repeating
+# 0x8F / 0x95 / 0x8C command codes — written from the FINDINGS description
+# rather than from the C++, so that agreement means something.
+RANDOM_CMDS = {0x8F: "random_start", 0x95: "random_pick", 0x8C: "random_end"}
+
+
+def expected_random(frames):
+    out, in_random, picked = [], False, False
+    for b in frames:
+        if b[3] != 0x00:
+            continue
+        c = b[4]
+        if c == 0x8F and not in_random:
+            out.append("random_start"); in_random, picked = True, False
+        elif c == 0x95 and in_random and not picked:
+            out.append("random_pick"); picked = True
+        elif c == 0x8C and in_random:
+            out.append("random_end"); in_random, picked = False, False
+    return out
+
 
 def main():
     if len(sys.argv) < 2:
@@ -36,7 +58,7 @@ def main():
         return 1
     path = sys.argv[1]
 
-    board, tracker, python_ev, raw_n = [], StateTracker(), [], 0
+    board, tracker, python_ev, raw_n, raw_frames = [], StateTracker(), [], 0, []
     for line in open(path, errors="ignore"):
         line = line.strip()
         if line.startswith("{"):
@@ -50,6 +72,7 @@ def main():
         r = parse_line(line)
         if r:
             raw_n += 1
+            raw_frames.append(r[1])
             for e in tracker.feed(*r):
                 python_ev.append(e)
 
@@ -73,9 +96,18 @@ def main():
     RANDOM = {"random_start", "random_pick", "random_end"}
     b_core = [(x, y) for x, y in zip(b, bb) if x not in RANDOM]
     n_rand = len(b) - len(b_core)
+    board_rand = [e["ev"] for e in board if e["ev"] in RANDOM]
+    want_rand = expected_random(raw_frames)
+    if board_rand or want_rand:
+        rand_ok = board_rand == want_rand
+        print(f"\nrandom-mode events   : board {board_rand}")
+        print(f"                       expected {want_rand}")
+        print("  " + ("random events MATCH" if rand_ok else "  <<< RANDOM MISMATCH"))
+    else:
+        print("\n  no random-mode events in this session — that path is UNVERIFIED.")
+        print("  To cover it: press Random twice, then Clear, a few times.")
     if n_rand:
-        print(f"  ({n_rand} random-mode events on the board only — the Python "
-              f"decoder has no random support, so they are excluded)")
+        pass
 
     ok = len(a) == len(b_core) and all(
         x == y and p == q for (x, p), (y, q) in zip(zip(a, ab), b_core))
