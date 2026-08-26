@@ -282,6 +282,8 @@ def main():
     path = CAPTURES / f"{stamp}_{args.label}.log"
 
     print(f"port {port}   log {path}")
+    print("Type a note + Enter at any time (e.g. the handset that lit up) "
+          "— it is stamped into the log.")
     print("Starting the board and running its self-test.\n")
 
     ser = serial.Serial(port, args.baud, timeout=0.2)
@@ -308,6 +310,20 @@ def main():
 
     tracker = StateTracker()
     verifier = Verifier(parse_expect(args.verify)) if args.verify else None
+    # Ground truth typed in as it happens. For anything the air cannot tell us
+    # — which handset physically lit up, say — a note keyed to the board's own
+    # clock is worth far more than a recollection reconstructed afterwards.
+    marks = []
+
+    def reader():
+        for line in sys.stdin:
+            line = line.strip()
+            if line:
+                marks.append((tracker_last[0], line))
+                print(f"  >>> noted: {line}")
+
+    tracker_last = [0]
+    threading.Thread(target=reader, daemon=True).start()
     voice = Speaker(not args.no_voice, args.voice, args.rate)
     if not args.no_voice and not voice.available:
         print("  (no `say` command — speech disabled)")
@@ -347,6 +363,7 @@ def main():
                     print(f"  [board] {text}")
                 r = parse_line(text)
                 if r:
+                    tracker_last[0] = r[0]
                     frames += 1
                     for e in tracker.feed(*r):
                         if e["event"] == "buzz":
@@ -399,6 +416,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        for t, note in marks:
+            fh.write(f"# MARK T:{t} {note}\n")
         fh.close()
         ser.close()
 

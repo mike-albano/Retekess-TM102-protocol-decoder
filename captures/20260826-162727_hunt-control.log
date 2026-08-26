@@ -1,0 +1,68 @@
+# TM102 capture — label=hunt-control port=/dev/cu.usbserial-0001 started=20260826-162727
+
+=== HUNT: 85 seconds, then it stops by itself. ===
+Put the board within ~1 m of the CONTROLLER.
+Press General, then Clear, about every 2 seconds, and
+DO NOT STOP until it says it has finished.
+
+  [1/34] RF_CH 20  (2420 MHz)   ~85s left — keep pressing
+  [2/34] RF_CH 23  (2423 MHz)   ~82s left — keep pressing
+  [3/34] RF_CH 26  (2426 MHz)   ~80s left — keep pressing
+  [4/34] RF_CH 29  (2429 MHz)   ~77s left — keep pressing
+  [5/34] RF_CH 32  (2432 MHz)   ~75s left — keep pressing
+  [6/34] RF_CH 35  (2435 MHz)   ~72s left — keep pressing
+  [7/34] RF_CH 38  (2438 MHz)   ~70s left — keep pressing
+  [8/34] RF_CH 41  (2441 MHz)   ~67s left — keep pressing
+  [9/34] RF_CH 44  (2444 MHz)   ~65s left — keep pressing
+  [10/34] RF_CH 47  (2447 MHz)   ~62s left — keep pressing
+  [11/34] RF_CH 50  (2450 MHz)   ~60s left — keep pressing
+  [12/34] RF_CH 53  (2453 MHz)   ~57s left — keep pressing
+  [13/34] RF_CH 56  (2456 MHz)   ~55s left — keep pressing
+  [14/34] RF_CH 59  (2459 MHz)   ~52s left — keep pressing
+  [15/34] RF_CH 62  (2462 MHz)   ~50s left — keep pressing
+  [16/34] RF_CH 65  (2465 MHz)   ~47s left — keep pressing
+  [17/34] RF_CH 33  (2433 MHz)   ~45s left — keep pressing
+  --- pass 2 of 2, keep going ---
+  [18/34] RF_CH 20  (2420 MHz)   ~42s left — keep pressing
+  [19/34] RF_CH 23  (2423 MHz)   ~40s left — keep pressing
+  [20/34] RF_CH 26  (2426 MHz)   ~37s left — keep pressing
+  [21/34] RF_CH 29  (2429 MHz)   ~35s left — keep pressing
+  [22/34] RF_CH 32  (2432 MHz)   ~32s left — keep pressing
+  [23/34] RF_CH 35  (2435 MHz)   ~30s left — keep pressing
+  [24/34] RF_CH 38  (2438 MHz)   ~27s left — keep pressing
+  [25/34] RF_CH 41  (2441 MHz)   ~25s left — keep pressing
+  [26/34] RF_CH 44  (2444 MHz)   ~22s left — keep pressing
+  [27/34] RF_CH 47  (2447 MHz)   ~20s left — keep pressing
+  [28/34] RF_CH 50  (2450 MHz)   ~17s left — keep pressing
+  [29/34] RF_CH 53  (2453 MHz)   ~15s left — keep pressing
+  [30/34] RF_CH 56  (2456 MHz)   ~12s left — keep pressing
+  [31/34] RF_CH 59  (2459 MHz)   ~10s left — keep pressing
+  [32/34] RF_CH 62  (2462 MHz)   ~7s left — keep pressing
+  [33/34] RF_CH 65  (2465 MHz)   ~5s left — keep pressing
+  [34/34] RF_CH 33  (2433 MHz)   ~2s left — keep pressing
+
+================ HUNT RESULT ================
+  RF_CH    MHz    energy   packets
+    20    2420         0        45
+    23    2423         1        86
+    26    2426         5        53
+    29    2429         0        33
+    32    2432         0       180
+    35    2435         0        56
+    38    2438         0        40
+    41    2441         0        51
+    44    2444         0        83
+    47    2447         0       131
+    50    2450         0        99
+    53    2453         0       158
+    56    2456        19       114
+    59    2459       269       240
+    62    2462       462       171   <== STRONGEST
+    65    2465       362       227
+    33    2433         0        41
+============================================
+
+Strongest: RF_CH 62 (2462 MHz), 462 energy hits.
+Lock and capture with:   r62   then   d
+Hunt finished. Nothing more will print until you type something.
+

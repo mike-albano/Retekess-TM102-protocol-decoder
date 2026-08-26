@@ -22,7 +22,7 @@ errors — see *Errors in the pre-existing PDF and README*.
 | **CRC** | **Off** — confirmed on air: 5-byte address + CRC-16 receives nothing at any payload length |
 | **Auto-ack** | Presumed off; unconfirmed |
 | **Payload** | **8 bytes**, laid out — see *The frame* |
-| **Controller events** | **`81` = General, `8C` = Clear** — measured |
+| **Controller events** | `81` General/Lock · `8C` Clear · `8F` Random-start · `95` Random-selected |
 | **Game state** | Three: idle / armed / answered — in every beacon frame |
 | **Buzz-in** | armed → answered (`p3` = `p4` = `00`). **Not** a p6 change |
 | **Buzzer identity** | **`p6` = `0x90` + (n XOR 4)** — all 8 handsets, verified 8/8 |
@@ -52,6 +52,7 @@ of *which button was pressed* and *which buzzer won*. See **Project goal**.
 | 2026-08-26 | Map verified 8/8 live against declared handset order |
 | 2026-08-26 | Voice announcements added for range testing; cold start of both devices verified; `p6` shown to be volatile |
 | 2026-08-26 | **Lock decoded**: same `0x81` command as General, no mask transmitted, exclusion enforced at the handset and cumulative |
+| 2026-08-26 | **Random mode**: both presses visible (`8F`, `95`); the selected handset is **not** transmitted, and a controller-off control proved the controller does not hop channels |
 | 2026-08-26 | Live test found a third state (**answered**) and a decoder flaw: repeat wins by the same buzzer were invisible. Fixed, then confirmed live on a run built around repeat wins |
 
 ### Open questions
@@ -801,6 +802,111 @@ This has consequences for the decoder. A passive receiver **cannot** see which
 handsets are locked out — the information is never transmitted. It can only be
 inferred by tracking the same history the handsets track: who answered, and
 whether a Clear has happened since.
+
+## Random mode  [FACT — 2026-08-26]
+
+Source: `captures/20260826-161522_random-mode.log`. Eight rounds: Random →
+blink → Random → one handset lit → Clear, with the lit handset typed into the
+log each time (3, 7, 5, 2, 7, 6, 5, 7).
+
+### The two button presses are visible  [FACT]
+
+Two command codes, alongside the known `0x81` General and `0x8C` Clear:
+
+| p4 | meaning | count |
+|---|---|---|
+| **`0x8F`** | **Random pressed once** — all handsets blink | 21 |
+| **`0x95`** | **Random pressed again** — selection locked in | 30 |
+
+Both repeat every ~3 s for as long as the mode is active, so they are states as
+well as events, and either can be picked up by a receiver joining mid-round.
+
+### The selected handset is NOT transmitted  [FACT — negative result]
+
+Nothing distinguishes a round where handset 2 was chosen from one where
+handset 7 was. Checked exhaustively:
+
+- **p6 never moved.** It held `0x93` — stale from the previous session — in
+  **1,628 of 1,630 frames**, across eight rounds selecting five different
+  handsets. The winner field is untouched by Random.
+- Every byte of the 30 `0x95` selection frames, grouped by the handset that
+  actually lit: no byte takes a consistent per-handset value.
+- Same for the beacon frames within each round.
+
+### Transmission nearly stops while blinking  [FACT]
+
+| phase | frames/s |
+|---|---|
+| idle | 30.4 |
+| **blinking** | **1.5** |
+| selected | 8.1 |
+| (armed, for comparison) | ~148 |
+
+The controller goes almost silent during the blink — twenty times quieter than
+idle. Eight handsets blinking in unison need coordination from somewhere, and
+it is not arriving on this channel.
+
+### Two hypotheses  [OPEN]
+
+**(a) The handsets decide, as with Lock.** `0x8F` starts a synchronised
+rotation that the handsets free-run; `0x95` freezes it; whoever's turn it is
+stays lit. No identity is ever transmitted, and the silence is explained
+because nothing needs saying. This would make the selection **unknowable** to a
+passive receiver on principle, not by accident.
+
+**(b) The coordination happens off-channel.** The controller hops elsewhere to
+run the blink, which would explain the silence equally well and would mean
+there is a whole conversation we have never seen. **[REFUTED — see below]**
+
+These make opposite predictions and one cheap test separated them.
+
+### The channel hunt, and the control that saved it  [FACT]
+
+Hunting all 16 channels while cycling Random produced an alarming result —
+three channels that had been **completely dead** the day before were now the
+loudest in the band, while our channel 50 had gone quiet:
+
+| RF_CH | MHz | during Random | earlier, normal use |
+|---|---|---|---|
+| 50 | 2450 | 3 | **277** |
+| 59 | 2459 | **286** | 0 |
+| 62 | 2462 | **282** | 0 |
+| 65 | 2465 | **243** | 0 |
+
+Read alone that says "the controller hops during Random". It does not.
+
+**Control run** (`captures/20260826-162727_hunt-control.log`): same sweep, same
+room, **controller switched off**, nothing touched:
+
+| RF_CH | 50 | 56 | 59 | **62** | 65 |
+|---|---|---|---|---|---|
+| energy | 0 | 19 | 269 | **462** | 362 |
+
+Stronger with the controller off than with it on. The energy peaks at
+**2462 MHz — exactly the centre of WiFi channel 11** — and falls off
+symmetrically either side, which is the shape of a 20 MHz WiFi carrier and not
+of a hopping 1 MHz GFSK link. It was simply someone's afternoon WiFi; the day
+before, at 22:42, it was idle.
+
+**So hypothesis (b) is refuted and (a) stands.** The controller does not leave
+channel 50. The silence during blinking is real silence, and the identity of
+the randomly selected handset is **never transmitted at all**.
+
+That is a permanent limit, not a gap in our method: a passive receiver cannot
+know which handset was chosen, because nothing on the air says so.
+
+**Why the control mattered.** The uncontrolled result was suggestive, internally
+consistent, and wrong. Two channels dead yesterday and loud today looks like
+causation when it is a time of day. Any future claim about channel energy needs
+the controller-off run beside it.
+
+**Incidental:** our channel 50 sits 12 MHz below that WiFi carrier, far enough
+that it has never interfered. The offer to drive somewhere quieter was never
+needed — but this is what it would have been for.
+
+Worth noting for the project either way: **the first Random press is fully
+capturable, the outcome is not** — which is the reverse of the buzz-in case,
+where the outcome is broadcast continuously.
 
 ### A third frame class  [OPEN]
 
