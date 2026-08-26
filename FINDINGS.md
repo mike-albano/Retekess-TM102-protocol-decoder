@@ -52,7 +52,7 @@ of *which button was pressed* and *which buzzer won*. See **Project goal**.
 | 2026-08-26 | Map verified 8/8 live against declared handset order |
 | 2026-08-26 | Voice announcements added for range testing; cold start of both devices verified; `p6` shown to be volatile |
 | 2026-08-26 | **Lock decoded**: same `0x81` command as General, no mask transmitted, exclusion enforced at the handset and cumulative |
-| 2026-08-26 | **Random mode**: both presses visible (`8F`, `95`); the selected handset is **not** transmitted, and a controller-off control proved the controller does not hop channels |
+| 2026-08-26 | **Random mode**: both presses visible (`8F`, `95`); the pick is unobtainable — not transmitted, not inferable from timing, and no buzzing follows to reveal it |
 | 2026-08-26 | Live test found a third state (**answered**) and a decoder flaw: repeat wins by the same buzzer were invisible. Fixed, then confirmed live on a run built around repeat wins |
 
 ### Open questions
@@ -903,6 +903,43 @@ the controller-off run beside it.
 **Incidental:** our channel 50 sits 12 MHz below that WiFi carrier, far enough
 that it has never interfered. The offer to drive somewhere quieter was never
 needed — but this is what it would have been for.
+
+### Not inferable from timing either  [FACT — negative result]
+
+If the blink were a rotation frozen by the second press, the outcome would
+follow from the gap between the two presses. It does not:
+
+| gap | handset |
+|---|---|
+| 3.38 s | 5 |
+| 3.40 s | **7** |
+
+Twenty milliseconds apart, different handsets. Handset 7 also came from gaps of
+3.20 s, 3.40 s and 4.34 s; handset 5 from 1.05 s and 3.38 s. There is no
+function from timing to outcome at any resolution we can measure. It is a real
+random draw inside the controller, not a frozen rotation.
+
+### And no downstream event reveals it  [FACT — from use]
+
+Confirmed by the operator: **nobody buzzes during Random.** It is purely a way
+to choose a person, shown by lighting that handset green. So there is no later
+buzz-in to give the answer away either — the one indirect route is closed
+because the situation it needed never arises.
+
+### Conclusion: the pick is unobtainable
+
+| | |
+|---|---|
+| Random pressed (blink starts) | `0x8F` — **yes** |
+| Random pressed again (pick made) | `0x95` — **yes** |
+| **Which handset was picked** | **no. Not transmitted, not inferable, no downstream tell** |
+
+The start and end of a draw can be detected and timed precisely; the outcome
+exists only in the handsets' own logic and on their LEDs.
+
+**Recommended workaround:** have the scorekeeping software do the draw itself.
+It knows all eight handsets and can display the result with full knowledge. The
+controller's Random button then serves no purpose the software needs.
 
 Worth noting for the project either way: **the first Random press is fully
 capturable, the outcome is not** — which is the reverse of the buzz-in case,
