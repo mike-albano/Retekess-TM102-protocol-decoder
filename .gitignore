@@ -11,3 +11,7 @@ __pycache__/
 
 # macOS Finder metadata
 .DS_Store
+
+# Blog post — drafts and duplicated media, kept out of the public repo
+blog post/
+blog-post/
