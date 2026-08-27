@@ -1,95 +1,156 @@
-> ## ⚠️ SUPERSEDED IN PART — read `FINDINGS.md` first
->
-> This document was written before the FCC filings were retrieved. Its
-> hardware wiring and project intent still stand, but several technical
-> assumptions below have been **disproved by the certification documents**:
->
-> | This README says | Actual, per FCC filings |
-> |---|---|
-> | "We think 2 Mbps, might be 1 Mbps" | **1 Mbps**, confirmed by the measured 20 dB bandwidth |
-> | "Might operate on Channel 50" | **16 channels only**, 2420–2465 MHz at 3 MHz spacing. Ch 50 is one of them (index 11); the host's `F4` menu selects which |
-> | "Sniff by setting a 2-byte MAC of `0x00`/`0xAA` and reading noise" | Right *technique*, wrong *expectation* — the radio is an **Si24R1 (nRF24L01+ clone)**, and its address may never begin with `0x00`/`0xAA`, so those captures contain no framed packets. Use them to hunt for a recurring address, then lock on |
-> | Wiring: "VCC → 3.3V, do NOT connect to 5V" | Correct for a *bare* module. This build uses a **PA+LNA module on a regulated socket adapter**, so **VCC → VIN (5V)** — see `FINDINGS.md` §12 |
->
-> Do not code against the numbers in this file. `FINDINGS.md` carries the
-> verified values and cites its sources.
+# Retekess TM102 — passive protocol decoder
 
-# Retekess TM102 RF Protocol Sniffer
+A receive-only decoder for the Retekess TM102 wireless quiz-buzzer system.
+Plug an ESP32 into anything that can read a serial port and get the game as
+JSON:
 
-This document outlines the hardware configuration, firmware, and methodology to use to enable intercepting and capturing raw over-the-air (OTA) RF frames from the Retekess TM102 Answer Buzzer System.
-
-The system uses GFSK modulation on the 2.4GHz ISM band. Because the manufacturer does not broadcast using standard BLE or WiFi packets, we use a technique pioneered by Travis Goodspeed to trick a standard nRF24L01+ transceiver into dumping raw, promiscuous RF data to an ESP32 microcontroller via SPI.
-
-## Hardware Requirements
-
-To replicate this sniffing setup, the following has been set up and connected to this computer:
-1. **ESP32 Microcontroller** (e.g., ESP32-WROOM-32 dev board)
-2. **nRF24L01+ Transceiver Module** (Ensuring it is the '+' version, as older versions lack the required features for promiscuous mode).
-3. **Jumper Wires**
-
-### Wiring Diagram (ESP32 to nRF24L01+)
-
-| nRF24L01+ Pin | ESP32 Pin | Function |
-| :--- | :--- | :--- |
-| VCC | 3.3V | Power (Do NOT connect to 5V) |
-| GND | GND | Ground |
-| CE | GPIO 4 | Chip Enable |
-| CSN | GPIO 5 | SPI Chip Select |
-| SCK | GPIO 18 | SPI Clock |
-| MOSI | GPIO 23 | SPI Master Out Slave In |
-| MISO | GPIO 19 | SPI Master In Slave Out |
-| IRQ | Not Connected | Interrupt Request |
-
-*(Note: Depending on your specific ESP32 board, the default VSPI pins might vary slightly. Adjust your firmware accordingly if needed).*
-
-## The Travis Goodspeed Promiscuous Exploit
-
-By default, the nRF24L01+ is designed to only pass packets to the microcontroller if the packet's MAC address perfectly matches the receiver's configured MAC address, and the CRC check passes. 
-
-To sniff unknown MAC addresses (like the Retekess system), we use a deliberate misconfiguration exploit:
-1. **Disable CRC Checking:** We turn off CRC validation so the chip doesn't drop packets that fail checksums.
-2. **Shorten the MAC Address:** We configure the receiver to expect the shortest possible MAC address (2 bytes).
-3. **Use a Generic MAC:** We set the receiver's MAC address to a common RF noise pattern, such as `0x00 00` or `0xAA AA`.
-
-Because the 2.4GHz spectrum is noisy, ambient RF static will frequently naturally align with `0x00 00` or `0xAA AA`. When this happens, the nRF24L01+ believes a valid packet has started and immediately begins dumping the subsequent raw, on-air bits over the SPI bus to the ESP32. 
-
-By constantly dumping this raw bitstream, we successfully capture the Retekess packets hidden within the noise.
-
-## Firmware Configuration
-
-The ESP32 must be flashed with firmware (typically written in C++ using the Arduino IDE and the `RF24` library) that configures the nRF24L01+ for this exploit.
-
-Key configuration steps in the firmware, which has already occured:
-1. **Initialize Radio:** Begin SPI communication with the nRF24L01+.
-2. **Set Data Rate:** We think the Retekess system operates at 2mbps, but it might operate at 1mbps. We are not sure which one it is, and you should look for lab reports or a public reference that can confirm the data rate.
-3. **Disable Auto-Acknowledge:** `radio.setAutoAck(false)`
-7. **Set Channel:** The Retekess system might operates on Channel 50 (2450 MHz). `radio.setChannel(50)` but we are not sure of this. The channels are configurable on the retekess controller.
-- If you want to listen on other channels, that is possible.
-8. **Loop & Print:** Continuously read the payload buffer and print it to the Serial monitor over USB.
-
-## Serial Output Format
-
-When connected to the ESP32 via Serial (baud rate 115200), the output will appear as a continuous stream of hex strings representing the raw bits pulled from the air.
-
-Example Output:
-```
-HEX: 1D 7C 36 FF A0 EF 3E FC 4E 8D FA 4F 5A 5D FC 51 01 54 FF FF 54 8D EB FA F4 AF EF BD F7 CE BE DD 
-HEX: 8C 0C 0C 0C 1D 79 3B 7F 77 31 DD 4A FF 4E B9 A0 E7 3E F4 4E B5 FA 0F 5A 55 FC 00 01 00 FF EF AA 
-HEX: 46 06 06 06 0E BC 1D BF BB 98 EE 25 7F A7 5C D0 73 9F 7A 27 5A FD 07 AD 2A FE 00 00 80 7F F7 55 
+```json
+{"t":24110,"ev":"general"}
+{"t":26902,"ev":"buzz","buzzer":3}
+{"t":31447,"ev":"lock"}
+{"t":39880,"ev":"clear"}
 ```
 
-## Mandatory Reading
-You MUST read the following research and artifacts, before proceeding with Next Steps:
+The TM102 has no API, no serial port and no documentation beyond a one-page
+manual. This project works out what its controller transmits, and turns it into
+an event stream you can build a scoreboard, sound effects or a stream overlay
+on top of.
 
-- "Retekess FCC ID RF Analysis.pdf"
-- Every picture in the directory "pics" contains serial numbers, FCC IDs and other relevant information. Analyze each picture, given the following conditions:
-1) Each buzzer picture is labelled as "buzzer-<increment>", for example "buzzer-1.jpg", "buzzer-2.jpg", etc.
-2) Their are 2 controller pictures, one of the front labelled "controller-front.jpg" and one of the back labelled "controller-back.jpg"
+**The radio never transmits.** Auto-acknowledgement is disabled in hardware; it
+cannot acknowledge, reply, or disturb a game in progress.
 
+---
 
-## Next Steps: Identifying Button Presses
-The goal is to identify each button press from the controller, and which buzzer buzzes in first.
+## What it decodes
 
-Develop the raw capture pipeline to acquire the data. The next challenge is analyzing the raw `HEX:` dumps to mathematically identify the exact byte sequences or payloads that correspond to specific buzzer physical button presses. 
+| | |
+|---|---|
+| **General** pressed | buzzers armed |
+| **Clear** pressed | back to idle |
+| **Lock** pressed | re-armed, excluding whoever just answered |
+| **Buzz-in** | *which* handset answered first, 1–32 |
+| **Random** | the mode starting and resolving |
 
-*(Analysis methodologies and payload decoding are left to the researcher, as the current captures require advanced differential analysis to separate genuine buzzer uplinks or targeted downlinks from the ambient RF static and continuous Controller spam).*
+Verified against known ground truth: 8 of 8 handsets identified in a test where
+the handset order was declared in advance, and 83 General / 83 Clear / 73
+buzz-ins decoded across six capture sessions with no errors.
+
+### What it cannot decode, and why
+
+Two things are **not knowable to any passive receiver**, and it is worth
+knowing that up front rather than hunting for them:
+
+- **Which handsets are locked out.** No mask is transmitted. A locked handset
+  simply goes silent; the exclusion is enforced inside the handset itself.
+  Reconstruct it by tracking who has buzzed since the last `clear`.
+- **Which handset a Random draw picked.** Not transmitted, not inferable from
+  press timing, and no later event reveals it.
+
+The pattern behind both: **this controller broadcasts state transitions, not
+decisions.** Anything a handset decides locally stays local.
+
+---
+
+## The protocol, briefly
+
+| | |
+|---|---|
+| Radio | Si24R1 — an nRF24L01+ clone, standard ShockBurst |
+| Modulation | GFSK, 1 Mbps |
+| Channel | RF_CH 50 (2450 MHz) by default; the host's `F4` menu picks one of 16 |
+| Address | `18 18 18 18 3A`, 5 bytes |
+| CRC | off |
+| Payload | 8 bytes |
+
+```
+on air:  55 | 18 18 18 18 3A | p0 p1 p2 p3 p4 p5 p6 p7
+          preamble   address           payload
+```
+
+`p1` carries the game state, `p6` the handset that last answered, and `p3`/`p4`
+mark a standing answer or a button command. Full derivation, including the
+measurements behind every claim, is in **[FINDINGS.md](FINDINGS.md)**.
+
+---
+
+## Hardware
+
+About $15. An **ESP32** (this build: ESP-WROOM-32, CP2102, USB-C) and an
+**nRF24L01+PA+LNA** module on a regulated socket adapter.
+
+| Module pin | ESP32 pin |
+|---|---|
+| VCC | **VIN** (see note) |
+| GND | GND |
+| CE | GPIO 4 |
+| CSN | GPIO 5 |
+| SCK | GPIO 18 |
+| MISO | GPIO 19 |
+| MOSI | GPIO 23 |
+
+> **VCC goes to VIN, not 3.3V.** That is correct for *this* build only. The
+> PA+LNA module sits on an adapter board with its own regulator; feeding that
+> regulator 3.3 V leaves it in dropout at ~2.9 V and the radio browns out. A
+> **bare** nRF24 module is the opposite — 3.3 V only, never 5 V.
+
+---
+
+## Quickstart
+
+```bash
+./go.sh setup     # one-time: arduino-cli, ESP32 core, RF24 library
+./go.sh flash     # compile and upload
+```
+
+Then either read the serial port yourself, or:
+
+```bash
+python3 tools/live.py           # live readout, speaks each event aloud
+python3 tools/live.py --verify  # walk through handsets and check each one
+```
+
+The board starts decoding on power-up. Nothing has to be sent to it.
+
+### On a Raspberry Pi
+
+See **[pi/README.md](pi/README.md)**. Copy `pi/`, plug in the board, and read
+lines. The decoding happens on the ESP32, so consumers need no library and no
+Python.
+
+---
+
+## Layout
+
+| | |
+|---|---|
+| `FINDINGS.md` | the full technical record — every measurement, and every wrong turn, struck through rather than deleted |
+| `firmware/` | the ESP32 sketch: capture modes and the on-board decoder |
+| `tools/` | capture, decode, verification and analysis scripts |
+| `pi/` | deployment package: event streamer, systemd unit, event schema |
+| `captures/` | every raw capture session — the evidence behind the findings |
+| `pics/`, `docs/` | FCC exhibits, hardware photos, and the original pre-research README |
+| `event_map.json` | the decode map; measured values are the authority, the formula is a fallback |
+
+`START-HERE.md` is the plain-language runbook; `QUICKSTART.md` the terse one.
+
+---
+
+## How this was worked out
+
+The short version: FCC filings first, then a $15 capture rig, then a loop of
+*write the prediction down, then measure*. That loop caught several confident,
+plausible, wrong conclusions — a handset-ID formula that fit four of eight
+cases, ambient WiFi mistaken for a discovery, a bug that only surfaced when a
+person pressed two buttons at once.
+
+`FINDINGS.md` keeps all of them, struck through rather than deleted, so the
+reasoning stays auditable.
+
+## Legal
+
+Receive-only, on hardware I own, for interoperability with equipment I bought.
+The FCC exhibits in `pics/` are public records retrieved from the Commission's
+filing database.
+
+Everything original here is MIT licensed — see [LICENSE](LICENSE). The Retekess
+user manual included for reference remains the property of its publisher.
